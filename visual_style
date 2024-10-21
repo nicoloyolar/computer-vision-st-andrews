@@ -1,0 +1,11 @@
+import winsound
+
+def play_alert_sound():
+    """Reproduce un sonido de alerta en caso de estancamiento."""
+    frequency = 2500  # Frecuencia del sonido en Hertz
+    duration = 1000  # Duración del sonido en milisegundos
+    winsound.Beep(frequency, duration)
+
+def check_stagnation_alert(last_alert_time, current_time, interval_minutes=60):
+    """Verifica si ha pasado suficiente tiempo para enviar una nueva alerta de estancamiento."""
+    return (current_time - last_alert_time).total_seconds() >= interval_minutes * 60

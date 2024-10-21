@@ -1,0 +1,2 @@
+MODEL_PATH      = "C:\\Users\\FULLUNLOCK\\Desktop\\DEVELOPMENT\\computer-vision\\proyecto_contador\\model_video\\modelofinalcombinado.pt"
+VIDEO_PATH      = "C:\\Users\\FULLUNLOCK\\Desktop\\DEVELOPMENT\\computer-vision\\proyecto_contador\\model_video\\actual.mp4"
