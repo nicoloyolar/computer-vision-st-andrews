@@ -13,53 +13,82 @@ import tkinter as tk
 import threading
 import pyodbc
 import json
-import whatsapp_messaging  # Importa el módulo para enviar mensajes por WhatsApp
+import whatsapp_messaging  
+import twilio
 
-#MODEL_PATH = "C:\\Users\\56975\\Downloads\\modelofinalcombinado.pt"
-# VIDEO_PATH = "rtsp://admin:admin123@192.168.31.108:554/cam/realmonitor?channel=6&subtype=0" 
-VIDEO_PATH = "C:\\Users\\56975\\Videos\\vlc-record-2024-10-17-14h41m33s-rtsp___192.168.31.108_554_cam_realmonitor-.mp4"
-MODEL_PATH = "C:\\Users\\56975\\OneDrive\\Escritorio\\proyecto_contador\\modelo\\modelofinalcombinado.pt"
 
-SCALE_FACTOR = 0.5
-COUNTER_LINE_Y = 1000
+VIDEO_PATH = "C:\\Users\\Developer\\Desktop\\Nueva_posicionvideos.mp4"
+MODEL_PATH = "C:\\Users\\Developer\\Downloads\\proyecto_contador\\proyecto_contador\\modelo\\model_retrained_with_3_classes.pt"
 
-p_c_1kg = 0
-p_c_500grs = 0
-estancamiento = 0
-total_1kg = 0
-total_500grs = 0
-total_stagnations = 0
+SCALE_FACTOR                = 0.5
+COUNTER_LINE_Y              = 950  
+MARGIN                      = 10 
+MIN_TIME_BETWEEN_COUNTS     = 1.5 
+ALERTA_INTERVALO_SEGUNDOS   = 20  
 
-last_hour = datetime.now().hour
+p_c_1kg             = 0
+p_c_500grs          = 0
+estancamiento       = 0
+total_1kg           = 0
+total_500grs        = 0
+total_stagnations   = 0
+last_hour           = datetime.now().hour
 
-sort_tracker = Sort(max_age=120, min_hits=2, iou_threshold=0.25)
-counted_ids = set()
-object_classes = {}
-object_scores = {}
-last_summary = ""
-history = []
-last_update_time = time.time()
+sort_tracker            = Sort(max_age=90, min_hits=4, iou_threshold=0.45)
+counted_ids             = set()
+counted_timestamps      = {}
+object_classes          = {}
+object_scores           = {}
+last_summary            = ""
+history                 = []
+last_update_time        = time.time()
 
-server = 'localhost'  
-database = 'ConteoChoritos'
-connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};Trusted_Connection=yes'
-conn = pyodbc.connect(connection_string)
-cursor = conn.cursor()
+server      = '192.168.31.168,1433'
+database    = 'db_conteo_entero'
+username    = 'capturador'
+password    = 'J7mo6uv97Y0x'
+
+try:
+    connection = pyodbc.connect(
+        f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}'
+    )
+    print("Conexión exitosa a la base de datos.")
+
+    
+except Exception as e:
+    print("Error al conectar a la base de datos:", e)
+finally:
+    if connection:
+        connection.close()
+
+def en_horario_turno():
+    now = datetime.now()
+    dia, hora = now.weekday(), now.hour
+    if dia < 5:  
+
+        if (8 <= hora < 20):
+            return True
+    elif dia == 5 or dia == 6:  
+        
+        if 8 <= hora < 20:
+            return True
+    return False
+
 
 def enviar_correo():
-    with open('C:\\Users\\56975\\OneDrive\\Escritorio\\config.json', 'r') as f:
+    with open('proyecto_contador\config.json', 'r') as f:
         config = json.load(f)
 
-    smtp_server = config['smtp_server']
-    smtp_port = config['smtp_port']
-    smtp_username = config['smtp_username']
-    smtp_password = config['smtp_password']
+    smtp_server     = config['smtp_server']
+    smtp_port       = config['smtp_port']
+    smtp_username   = config['smtp_username']
+    smtp_password   = config['smtp_password']
 
     msg = MIMEMultipart()
-    msg['From'] = smtp_username
-    msg['To'] = ', '.join(config['destinatarios'])
-    msg['Cc'] = ', '.join(config['cc'])
-    msg['Subject'] = 'Resumen conteo de productos' 
+    msg['From']     = smtp_username
+    msg['To']       = ', '.join(config['destinatarios'])
+    msg['Cc']       = ', '.join(config['cc'])
+    msg['Subject']  = 'Resumen conteo de productos' 
 
     body = (
         f"Este es el resumen del conteo de productos:\n\n"
@@ -70,43 +99,67 @@ def enviar_correo():
     )
     
     msg.attach(MIMEText(body, 'plain'))
-
     all_recipients = config['destinatarios'] + config['cc']
 
     try:
         with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()  
-            server.login(smtp_username, smtp_password)  
+            server.starttls()
+            server.login(smtp_username, smtp_password)
             server.send_message(msg, from_addr=smtp_username, to_addrs=all_recipients)
         print("Correo enviado exitosamente.")
     except Exception as e:
-        print(f"Error al enviar el correo: {e}")                         
+        print(f"Error al enviar el correo: {e}")
 
-    # Enviar mensaje de WhatsApp con el mismo resumen
     enviar_mensaje_whatsapp(body)
 
-def enviar_mensaje_whatsapp(mensaje_body):
-    with open("C:\\Users\\56975\\OneDrive\\Escritorio\\config.json", 'r') as f:
-        config = json.load(f)
-    
-    account_sid = config['account_sid']
-    auth_token = config['auth_token']
-    to_whatsapp = config['to_whatsapp']  # Número de WhatsApp verificado
+from twilio.rest import Client
 
+def enviar_mensaje_whatsapp(mensaje_body):
     try:
-        # Llama a la función del módulo whatsapp_messaging
-        mensaje_sid = whatsapp_messaging.enviar_mensaje_whatsapp(account_sid, auth_token, to_whatsapp, mensaje_body)
-        print(f"Mensaje de WhatsApp enviado exitosamente. SID: {mensaje_sid}")
+
+        with open("C:\\Users\\Developer\\Downloads\\proyecto_contador\\proyecto_contador\\config.json", 'r') as f:
+            config = json.load(f)
+
+        account_sid         = config.get('account_sid')
+        auth_token          = config.get('auth_token')
+        to_whatsapp_list    = config.get('to_whatsapp')  
+        from_whatsapp       = "whatsapp:+14155238886" 
+
+        if not all([account_sid, auth_token, to_whatsapp_list, from_whatsapp]):
+            print("Error: Falta una configuración necesaria en config.json")
+            return
+
+        client = Client(account_sid, auth_token)
+
+        for to_whatsapp in to_whatsapp_list:
+            print(f"Enviando mensaje a {to_whatsapp}")
+            message = client.messages.create(
+                body=mensaje_body,
+                from_=from_whatsapp,
+                to=to_whatsapp
+            )
+
     except Exception as e:
-        print(f"Error al enviar el mensaje de WhatsApp: {e}")
+        print("Error al intentar enviar el mensaje de WhatsApp:")
+        print(str(e))
 
 def insertar_conteo(cantidad1kg, cantidad500gr, estancamientos):
     sql_query = """
     INSERT INTO Conteos (Cantidad1kg, Cantidad500gr, Estancamientos)
     VALUES (?, ?, ?)
     """
-    cursor.execute(sql_query, (cantidad1kg, cantidad500gr, estancamientos))
-    conn.commit()
+    try:
+        connection = pyodbc.connect(
+            f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}'
+        )
+        cursor = connection.cursor()
+        cursor.execute(sql_query, (cantidad1kg, cantidad500gr, estancamientos))
+        connection.commit()
+    except Exception as e:
+        print(f"Error al insertar datos en la base de datos: {e}")
+    finally:
+        cursor.close()
+        connection.close()
 
 def update_summary():
     global last_summary, history, total_1kg, total_500grs, total_stagnations
@@ -117,11 +170,9 @@ def update_summary():
     history.append(summary)
     insertar_conteo(p_c_1kg, p_c_500grs, estancamiento)
     
-    # Enviar el correo y mensaje de WhatsApp en segundo plano
     threading.Thread(target=enviar_correo).start()
     
     update_summary_window(summary)
-
 
 def reset_counts():
     global p_c_1kg, p_c_500grs, estancamiento
@@ -173,11 +224,10 @@ def main():
         if not ret: break
 
         current_time = time.time()
-        if current_time - last_update_time >= 10: # tiempo para enviar alertas 
+        if current_time - last_update_time >= ALERTA_INTERVALO_SEGUNDOS and en_horario_turno():  
             update_summary()
             reset_counts()
             last_update_time = current_time  
-
 
         results = detector.detect_objects(frame)
         detections = [[*map(int, detection.xyxy[0]), float(detection.conf)] for detection in results[0].boxes]
@@ -187,10 +237,10 @@ def main():
             label = detector.model.names[int(results[0].boxes[0].cls)]
             display_text = f'{label} ({score * 100:.1f}%)'
 
-            if label == '500grs' and score >= 0.85:
+            if label == '500grs' and score >= 0.90:
                 draw_label(frame, display_text, x1, y1, color=(0, 255, 0), bg_color=(0, 0, 0, 0.5))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            elif label == '1kg' and score >= 0.95:
+            elif label == '1kg' and score >= 0.98:
                 draw_label(frame, display_text, x1, y1, color=(0, 255, 255), bg_color=(0, 0, 0, 0.5))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
@@ -205,8 +255,16 @@ def main():
             display_text = f'{fixed_label} ({fixed_score * 100:.1f}%)'
             draw_label(frame, display_text, x1, y1)
 
-            if (y1 + y2) // 2 > COUNTER_LINE_Y and track_id not in counted_ids:
+            object_center_y = (y1 + y2) // 2
+            if object_center_y > (COUNTER_LINE_Y + MARGIN) and track_id not in counted_ids:
+                current_time = time.time()
+                if track_id in counted_timestamps and current_time - counted_timestamps[track_id] < MIN_TIME_BETWEEN_COUNTS:
+                    continue  
+
+                print(f"Producto ID {track_id} contado a las {datetime.now().strftime('%H:%M:%S')}, posición Y: {object_center_y}")
                 counted_ids.add(track_id)
+                counted_timestamps[track_id] = current_time
+
                 if fixed_label == '1kg':
                     p_c_1kg += 1
                 elif fixed_label == '500grs':
@@ -237,4 +295,4 @@ def update_summary_window(summary=""):
     summary_window.update()
 
 if __name__ == "__main__":
-    main() 
+    main()
