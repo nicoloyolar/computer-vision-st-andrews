@@ -1,5 +1,4 @@
 import smtplib
-from tkinter import scrolledtext
 from video_stream import VideoStream
 from yolo_detection import YOLODetector
 from email.mime.multipart import MIMEMultipart
@@ -9,175 +8,152 @@ from datetime import datetime
 import cv2
 import numpy as np
 import time
-import tkinter as tk
 import threading
 import pyodbc
 import json
 import whatsapp_messaging  
 import twilio
+import sys
+import os
+from twilio.rest import Client
 
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-VIDEO_PATH = "C:\\Users\\Developer\\Desktop\\Nueva_posicionvideos.mp4"
-MODEL_PATH = "C:\\Users\\Developer\\Downloads\\proyecto_contador\\proyecto_contador\\modelo\\model_retrained_with_3_classes.pt"
+VIDEO_PATH = "C:\\Users\\Developer\\Downloads\\actual.mp4"
+MODEL_PATH = "C:\\computer-vision\\proyecto_contador\\modelo\\model_retrained_with_3_classes.pt"
 
-SCALE_FACTOR                = 0.5
-COUNTER_LINE_Y              = 950  
-MARGIN                      = 10 
-MIN_TIME_BETWEEN_COUNTS     = 1.5 
-ALERTA_INTERVALO_SEGUNDOS   = 20  
+SCALE_FACTOR = 0.2
+COUNTER_LINE_Y = 900  
+MARGIN = 10 
+ALERTA_INTERVALO_SEGUNDOS = 600
 
-p_c_1kg             = 0
-p_c_500grs          = 0
-estancamiento       = 0
-total_1kg           = 0
-total_500grs        = 0
-total_stagnations   = 0
-last_hour           = datetime.now().hour
+p_c_1kg = 0
+p_c_500grs = 0
+estancamiento = 0
+total_1kg = 0
+total_500grs = 0
+total_stagnations = 0
+last_hour = datetime.now().hour
 
-sort_tracker            = Sort(max_age=90, min_hits=4, iou_threshold=0.45)
-counted_ids             = set()
-counted_timestamps      = {}
-object_classes          = {}
-object_scores           = {}
-last_summary            = ""
-history                 = []
-last_update_time        = time.time()
+sort_tracker = Sort(max_age=90, min_hits=4, iou_threshold=0.25)
+counted_ids = set()
+object_classes = {}
+object_scores = {}
+last_summary = ""
+history = []
+last_update_time = time.time()
 
-server      = '192.168.31.168,1433'
-database    = 'db_conteo_entero'
-username    = 'capturador'
-password    = 'J7mo6uv97Y0x'
+# Base de datos SQL Server
+server = '192.168.31.168,1433'
+database = 'db_conteo_entero'
+username = 'capturador'
+password = 'J7mo6uv97Y0x'
 
+connection = None
 try:
     connection = pyodbc.connect(
         f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}'
     )
     print("Conexión exitosa a la base de datos.")
-
-    
 except Exception as e:
     print("Error al conectar a la base de datos:", e)
-finally:
-    if connection:
-        connection.close()
 
 def en_horario_turno():
     now = datetime.now()
     dia, hora = now.weekday(), now.hour
-    if dia < 5:  
-
-        if (8 <= hora < 20):
-            return True
-    elif dia == 5 or dia == 6:  
-        
-        if 8 <= hora < 20:
-            return True
+    if dia < 5:
+        return 8 <= hora < 24
+    elif dia in [5, 6]:
+        return 8 <= hora < 20
     return False
 
+def enviar_mensaje_whatsapp_async(mensaje_body):
+    threading.Thread(target=enviar_mensaje_whatsapp, args=(mensaje_body,)).start()
 
-def enviar_correo():
-    with open('proyecto_contador\config.json', 'r') as f:
+def enviar_mensaje_whatsapp(mensaje_body):
+    try:
+        with open("C:\\Users\\56975\\OneDrive\\Escritorio\\proyecto_contador\\config.json", 'r') as f:
+            config = json.load(f)
+        account_sid = config.get('account_sid')
+        auth_token = config.get('auth_token')
+        to_whatsapp_list = config.get('to_whatsapp')
+        from_whatsapp = "whatsapp:+14155238886"
+        
+        client = Client(account_sid, auth_token)
+        for to_whatsapp in to_whatsapp_list:
+            client.messages.create(body=mensaje_body, from_=from_whatsapp, to=to_whatsapp)
+    except Exception as e:
+        print("Error al enviar el mensaje de WhatsApp:", e)
+
+def enviar_correo_async(p_c_1kg, p_c_500grs, estancamiento):
+    threading.Thread(target=enviar_correo, args=(p_c_1kg, p_c_500grs, estancamiento)).start()
+
+def enviar_correo(p_c_1kg, p_c_500grs, estancamiento):
+    with open('C:\\computer-vision\\proyecto_contador\\config.json', 'r') as f:
         config = json.load(f)
-
-    smtp_server     = config['smtp_server']
-    smtp_port       = config['smtp_port']
-    smtp_username   = config['smtp_username']
-    smtp_password   = config['smtp_password']
+    smtp_server = config['smtp_server']
+    smtp_port = config['smtp_port']
+    smtp_username = config['smtp_username']
+    smtp_password = config['smtp_password']
 
     msg = MIMEMultipart()
-    msg['From']     = smtp_username
-    msg['To']       = ', '.join(config['destinatarios'])
-    msg['Cc']       = ', '.join(config['cc'])
-    msg['Subject']  = 'Resumen conteo de productos' 
-
-    body = (
-        f"Este es el resumen del conteo de productos:\n\n"
-        f"Paquetes de 1kg: {p_c_1kg}\n"
-        f"Paquetes de 500grs: {p_c_500grs}\n"
-        f"Estancamientos: {estancamiento}\n\n"
-        f"Resumen generado a las {datetime.now().strftime('%H:%M:%S')}."
-    )
+    msg['From'] = smtp_username
+    msg['To'] = ', '.join(config['destinatarios'])
+    msg['Cc'] = ', '.join(config['cc'])
+    msg['Subject'] = 'Resumen conteo de productos'
+    
+    body = (f"Este es el resumen del conteo de productos:\n\n"
+            f"Paquetes de 1kg: {p_c_1kg}\n"
+            f"Paquetes de 500grs: {p_c_500grs}\n"
+            f"Estancamientos: {estancamiento}\n\n"
+            f"Resumen generado a las {datetime.now().strftime('%H:%M:%S')}.")
     
     msg.attach(MIMEText(body, 'plain'))
     all_recipients = config['destinatarios'] + config['cc']
-
     try:
         with smtplib.SMTP(smtp_server, smtp_port) as server:
             server.starttls()
             server.login(smtp_username, smtp_password)
             server.send_message(msg, from_addr=smtp_username, to_addrs=all_recipients)
-        print("Correo enviado exitosamente.")
     except Exception as e:
         print(f"Error al enviar el correo: {e}")
+    
+    enviar_mensaje_whatsapp_async(body)
 
-    enviar_mensaje_whatsapp(body)
-
-from twilio.rest import Client
-
-def enviar_mensaje_whatsapp(mensaje_body):
-    try:
-
-        with open("C:\\Users\\Developer\\Downloads\\proyecto_contador\\proyecto_contador\\config.json", 'r') as f:
-            config = json.load(f)
-
-        account_sid         = config.get('account_sid')
-        auth_token          = config.get('auth_token')
-        to_whatsapp_list    = config.get('to_whatsapp')  
-        from_whatsapp       = "whatsapp:+14155238886" 
-
-        if not all([account_sid, auth_token, to_whatsapp_list, from_whatsapp]):
-            print("Error: Falta una configuración necesaria en config.json")
-            return
-
-        client = Client(account_sid, auth_token)
-
-        for to_whatsapp in to_whatsapp_list:
-            print(f"Enviando mensaje a {to_whatsapp}")
-            message = client.messages.create(
-                body=mensaje_body,
-                from_=from_whatsapp,
-                to=to_whatsapp
-            )
-
-    except Exception as e:
-        print("Error al intentar enviar el mensaje de WhatsApp:")
-        print(str(e))
-
-def insertar_conteo(cantidad1kg, cantidad500gr, estancamientos):
-    sql_query = """
-    INSERT INTO Conteos (Cantidad1kg, Cantidad500gr, Estancamientos)
-    VALUES (?, ?, ?)
-    """
-    try:
-        connection = pyodbc.connect(
-            f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}'
-        )
-        cursor = connection.cursor()
-        cursor.execute(sql_query, (cantidad1kg, cantidad500gr, estancamientos))
-        connection.commit()
-    except Exception as e:
-        print(f"Error al insertar datos en la base de datos: {e}")
-    finally:
-        cursor.close()
-        connection.close()
+def insertar_conteo_async(etiqueta):
+    def insertar_conteo():
+        sql_query = """
+        INSERT INTO ConteoProductos (Etiqueta)
+        VALUES (?)
+        """
+        try:
+            cursor = connection.cursor()
+            cursor.execute(sql_query, (etiqueta,))
+            connection.commit()
+            print(f"Datos insertados: {etiqueta}")
+        except Exception as e:
+            print(f"Error al insertar datos en la base de datos: {e}")
+        finally:
+            cursor.close()
+    threading.Thread(target=insertar_conteo).start()
 
 def update_summary():
-    global last_summary, history, total_1kg, total_500grs, total_stagnations
+    global last_summary, history, total_1kg, total_500grs, total_stagnations, last_update_time
+
     current_time = datetime.now().strftime('%H:%M:%S')
     last_summary = f'1kg: {p_c_1kg}, 500grs: {p_c_500grs}, Estancamientos: {estancamiento}'
     total_summary = f'Total 1kg: {total_1kg}, Total 500grs: {total_500grs}, Total Estancamientos: {total_stagnations}'
     summary = f"{current_time} - {last_summary} | {total_summary}"
     history.append(summary)
-    insertar_conteo(p_c_1kg, p_c_500grs, estancamiento)
     
-    threading.Thread(target=enviar_correo).start()
-    
-    update_summary_window(summary)
+    enviar_correo_async(p_c_1kg, p_c_500grs, estancamiento)
+    reset_counts()
+    last_update_time = time.time()
 
 def reset_counts():
-    global p_c_1kg, p_c_500grs, estancamiento
+    global p_c_1kg, p_c_500grs, estancamiento, counted_ids
     p_c_1kg, p_c_500grs, estancamiento = 0, 0, 0
-
+    counted_ids.clear()
 
 def draw_label(frame, text, x, y, color=(0, 255, 255), bg_color=(0, 0, 0, 0.5)):
     font_scale, font_thickness = 1.2, 3
@@ -217,7 +193,6 @@ def main():
         return
 
     detector = YOLODetector(MODEL_PATH)
-    threading.Thread(target=init_summary_window).start()
 
     while stream.cap.isOpened():
         ret, frame = stream.read_frame()
@@ -237,10 +212,10 @@ def main():
             label = detector.model.names[int(results[0].boxes[0].cls)]
             display_text = f'{label} ({score * 100:.1f}%)'
 
-            if label == '500grs' and score >= 0.90:
+            if label == '500grs' and score >= 0.5:
                 draw_label(frame, display_text, x1, y1, color=(0, 255, 0), bg_color=(0, 0, 0, 0.5))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            elif label == '1kg' and score >= 0.98:
+            elif label == '1kg' and score >= 0.5:
                 draw_label(frame, display_text, x1, y1, color=(0, 255, 255), bg_color=(0, 0, 0, 0.5))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
@@ -252,22 +227,16 @@ def main():
             if track_id not in object_classes:
                 object_classes[track_id], object_scores[track_id] = label, score
             fixed_label, fixed_score = object_classes[track_id], object_scores[track_id]
-            display_text = f'{fixed_label} ({fixed_score * 100:.1f}%)'
-            draw_label(frame, display_text, x1, y1)
 
-            object_center_y = (y1 + y2) // 2
-            if object_center_y > (COUNTER_LINE_Y + MARGIN) and track_id not in counted_ids:
-                current_time = time.time()
-                if track_id in counted_timestamps and current_time - counted_timestamps[track_id] < MIN_TIME_BETWEEN_COUNTS:
-                    continue  
+            object_bottom_y = y2  
 
-                print(f"Producto ID {track_id} contado a las {datetime.now().strftime('%H:%M:%S')}, posición Y: {object_center_y}")
+            if object_bottom_y > (COUNTER_LINE_Y + MARGIN) and track_id not in counted_ids:
                 counted_ids.add(track_id)
-                counted_timestamps[track_id] = current_time
+                insertar_conteo_async(fixed_label)
 
-                if fixed_label == '1kg':
+                if fixed_label == '1kg' and fixed_score >= 0.6:
                     p_c_1kg += 1
-                elif fixed_label == '500grs':
+                elif fixed_label == '500grs' and fixed_score >= 0.6:
                     p_c_500grs += 1
 
         draw_transparent_line(frame)
@@ -277,22 +246,6 @@ def main():
 
     stream.release()
     cv2.destroyAllWindows()
-
-def init_summary_window():
-    global summary_window, summary_textbox
-    summary_window = tk.Tk()
-    summary_window.title("Historial de conteos")
-    summary_textbox = scrolledtext.ScrolledText(summary_window, width=60, height=20, wrap=tk.WORD)
-    summary_textbox.pack(padx=10, pady=10)
-    summary_window.after(100, update_summary_window)
-    summary_window.mainloop()
-
-def update_summary_window(summary=""):
-    global summary_textbox
-    if summary:
-        summary_textbox.insert(tk.END, summary + '\n')
-        summary_textbox.see(tk.END)
-    summary_window.update()
 
 if __name__ == "__main__":
     main()
